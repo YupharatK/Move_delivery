@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/User/Receiver/receiver_delivery_list_screen.dart';
 import 'package:move_delivery/pages/User/Sender/search_receiver_screen.dart';
+import 'package:move_delivery/pages/User/Sender/sender_delivery_tracking_screen.dart';
+import 'package:move_delivery/pages/User/profile_screen.dart';
 import 'home_screen.dart';
 import 'custom_bottom_nav_bar.dart';
 import 'user_app_bar.dart'; // Import UserAppBar เข้ามาที่นี่
@@ -68,11 +71,18 @@ class _DeliveryMainScreenState extends State<DeliveryMainScreen> {
       HomeScreen(
         onSendParcelPressed: _startSearch,
         onReceiveParcelPressed: () {
-          print('Receive Parcel Tapped');
+          // <<-- แก้ไขตรงนี้
+          // สั่งให้นำทางไปยังหน้ารายการของผู้รับ
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const ReceiverDeliveryListScreen(),
+            ),
+          );
         },
       ),
-      // DeliveryListScreen(onSearchPressed: _startSearch),
-      // const ProfileScreen(),
+      SenderTrackingListScreen(),
+      const ProfileScreen(),
     ];
 
     return Scaffold(

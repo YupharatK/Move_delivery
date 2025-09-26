@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "887581273899",
+    "project_id": "move-delivery-677f7",
+    "storage_bucket": "move-delivery-677f7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:887581273899:android:a2aa1696014de5c2351f6e",
+        "android_client_info": {
+          "package_name": "com.example.move_delivery"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByZlPuRZycBCBEN1MiChpkHo1SLU2Wa0o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/User/Sender/delivery_list_screen.dart';
 // import 'package:image_picker/image_picker.dart'; // TODO: เพิ่ม dependency นี้
 
 class ProductDetailsScreen extends StatefulWidget {
@@ -41,7 +42,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
               // --- ปุ่มยืนยัน ---
               ElevatedButton(
                 onPressed: () {
-                  // TODO: Logic ยืนยันการสร้างออเดอร์
+                  // โค้ดนี้จะทำงานได้แล้ว
+                  Navigator.of(context).pop();
                 },
                 child: const Text('ยืนยัน'),
               ),

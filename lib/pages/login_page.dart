@@ -1,5 +1,9 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/Rider/rider_new_order_screen.dart';
+import 'package:move_delivery/pages/User/delivery_main_screen.dart';
 import 'package:move_delivery/pages/select_role_page.dart';
+import 'package:move_delivery/services/api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,6 +15,87 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _apiService = ApiService(); // สร้าง instance ของ ApiService
+  bool _isLoading = false;
+
+  // ฟังก์ชันสำหรับจัดการ Logic การ Login
+  Future<void> _login() async {
+    // ตรวจสอบว่าผู้ใช้กรอกข้อมูลครบหรือไม่
+    if (_phoneController.text.isEmpty || _passwordController.text.isEmpty) {
+      _showErrorSnackBar('กรุณากรอกอีเมลและรหัสผ่าน');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. ใช้ Firebase SDK ในการ Login
+      // ⚠️ ข้อควรระวัง: Firebase ไม่มี signInWithPhoneNumberAndPassword โดยตรง
+      // เราจึงต้องใช้ signInWithEmailAndPassword แทน
+      // ซึ่งหมายความว่าตอนสมัครสมาชิก คุณต้องสมัครด้วย "เบอร์โทรศัพท์" ในช่อง "อีเมล"
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _phoneController.text.trim(), // ส่งเบอร์โทรไปใน parameter email
+        password: _passwordController.text.trim(),
+      );
+
+      // 2. ตรวจสอบว่า Login สำเร็จและมี user object หรือไม่
+      if (credential.user != null) {
+        // 3. เรียก ApiService เพื่อดึงข้อมูลโปรไฟล์จาก Backend
+        final userProfile = await _apiService.getUserProfile();
+
+        if (userProfile != null) {
+          // 4. นำทางไปยังหน้าที่เหมาะสมตาม role
+          // ใช้ mounted เพื่อเช็คว่า widget ยังอยู่ใน tree ก่อนเรียก context
+          if (!mounted) return;
+
+          if (userProfile.role == 'rider') {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                builder: (context) => const RiderNewOrderScreen(),
+              ),
+              (route) => false,
+            );
+          } else if (userProfile.role == 'user') {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                builder: (context) => const DeliveryMainScreen(),
+              ),
+              (route) => false,
+            );
+          } else {
+            // กรณีมี role อื่นๆ หรือไม่มี role
+            _showErrorSnackBar('ไม่พบ role ของผู้ใช้');
+          }
+        } else {
+          _showErrorSnackBar('ไม่พบข้อมูลโปรไฟล์ผู้ใช้ในระบบ');
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      // จัดการ Error จาก Firebase Auth
+      if (e.code == 'user-not-found' ||
+          e.code == 'wrong-password' ||
+          e.code == 'invalid-credential') {
+        _showErrorSnackBar('เบอร์โทรศัพท์หรือรหัสผ่านไม่ถูกต้อง');
+      } else {
+        _showErrorSnackBar('เกิดข้อผิดพลาด: ${e.message}');
+      }
+    } catch (e) {
+      // จัดการ Error ทั่วไป
+      _showErrorSnackBar('เกิดข้อผิดพลาดที่ไม่คาดคิด กรุณาลองใหม่อีกครั้ง');
+      print(e);
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // ฟังก์ชันสำหรับแสดง SnackBar แจ้งเตือน
+  void _showErrorSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
               // ช่องกรอกเบอร์โทรศัพท์
               const Text(
-                'หมายเลขโทรศัพท์',
+                'อีเมล',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
@@ -82,10 +167,10 @@ class _LoginScreenState extends State<LoginScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    // TODO: ใส่ Logic การ Login
-                  },
-                  child: const Text('เข้าสู่ระบบ'),
+                  onPressed: _isLoading ? null : _login, // ปิดปุ่มระหว่างโหลด
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('เข้าสู่ระบบ'),
                 ),
               ),
               const SizedBox(height: 24),

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/Rider/rider_new_order_screen.dart';
 // import 'package:image_picker/image_picker.dart'; // TODO: เพิ่ม dependency นี้
 
 class RegisterRiderScreen extends StatefulWidget {
@@ -114,7 +115,13 @@ class _RegisterRiderScreenState extends State<RegisterRiderScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    // TODO: ใส่ Logic การสมัครสมาชิกของ Rider
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            const RiderNewOrderScreen(), // ไปที่หน้าหลักของการส่งของ
+                      ),
+                    );
                   },
                   child: const Text('สมัครสมาชิก'),
                 ),

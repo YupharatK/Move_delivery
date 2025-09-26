@@ -1,8 +1,17 @@
-import 'dart:io'; // ใช้สำหรับจัดการไฟล์รูปภาพ
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:move_delivery/pages/User/delivery_main_screen.dart';
-// import 'package:image_picker/image_picker.dart'; // TODO: เพิ่ม dependency นี้สำหรับเลือกรูป
-// import 'location_picker_screen.dart'; // TODO: import หน้าเลือกพิกัด
+import 'package:firebase_auth/firebase_auth.dart';
+// import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
+
+// Import ไฟล์ Model และ Service ที่เราสร้างขึ้น
+import 'package:move_delivery/models/user_model.dart';
+import 'package:move_delivery/services/api_service.dart';
+
+// Import หน้าจออื่นๆ (Note: We still need to keep the imports even if we don't use DeliveryMainScreen anymore,
+// unless we are sure it's not needed anywhere else in the file.)
+import 'package:move_delivery/pages/User/delivery_main_screen.dart'; // ยังคงไว้แต่ไม่ได้ใช้ในส่วน Navigator.pushReplacement
+import 'package:move_delivery/pages/User/location_picker_screen.dart';
 
 class RegisterUserScreen extends StatefulWidget {
   const RegisterUserScreen({super.key});
@@ -12,43 +21,134 @@ class RegisterUserScreen extends StatefulWidget {
 }
 
 class _RegisterUserScreenState extends State<RegisterUserScreen> {
-  // State สำหรับเก็บไฟล์รูปภาพที่เลือก
+  // State
   File? _profileImage;
+  bool _isLoading = false;
 
-  // Controllers สำหรับช่องกรอกข้อมูล
+  // Controllers
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _addressController = TextEditingController();
-  final _gpsController =
-      TextEditingController(); // ช่องนี้จะให้ map อัปเดตค่าให้
+  final _gpsController = TextEditingController();
 
-  // ฟังก์ชันสำหรับเลือกรูปภาพ (UI-only for now)
-  Future<void> _pickImage() async {
-    // TODO: ใส่ Logic การเลือกรูปภาพโดยใช้ package image_picker
-    // final pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery);
-    // if (pickedFile != null) {
-    //   setState(() {
-    //     _profileImage = File(pickedFile.path);
-    //   });
-    // }
-    print('Picking image...');
+  // สร้าง instance ของ ApiService ไว้ใช้งาน
+  final _apiService = ApiService();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _addressController.dispose();
+    _gpsController.dispose();
+    super.dispose();
   }
 
-  // ฟังก์ชันสำหรับเลือกพิกัดจากแผนที่ (UI-only for now)
+  Future<void> _pickImage() async {
+    final pickedFile = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 50,
+    );
+    if (pickedFile != null) {
+      setState(() {
+        _profileImage = File(pickedFile.path);
+      });
+    }
+  }
+
   Future<void> _pickLocation() async {
-    // TODO: ใส่ Logic การนำทางและรับค่าจาก LocationPickerScreen
-    // final result = await Navigator.of(context).push(
-    //   MaterialPageRoute(builder: (ctx) => const LocationPickerScreen()),
-    // );
-    // if (result != null) {
-    //   final selectedAddress = result['address'];
-    //   final selectedLatLng = result['latlng'];
-    //   _addressController.text = selectedAddress;
-    //   _gpsController.text = '${selectedLatLng.latitude}, ${selectedLatLng.longitude}';
-    // }
-    print('Picking location...');
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (ctx) => const LocationPickerScreen()),
+    );
+    if (result != null && mounted) {
+      final latitude = result['latitude'] as double;
+      final longitude = result['longitude'] as double;
+      _gpsController.text = '$latitude, $longitude';
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('เลือกพิกัดสำเร็จ! กรุณากรอกรายละเอียดที่อยู่'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _register() async {
+    final isValid =
+        _nameController.text.isNotEmpty &&
+        _phoneController.text.isNotEmpty &&
+        _emailController.text.isNotEmpty &&
+        _passwordController.text.isNotEmpty &&
+        _addressController.text.isNotEmpty &&
+        _gpsController.text.isNotEmpty &&
+        (_passwordController.text == _confirmPasswordController.text);
+
+    if (!isValid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('กรุณากรอกข้อมูลให้ครบถ้วนและถูกต้อง')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+      final uid = userCredential.user!.uid;
+
+      String? photoUrl;
+      if (_profileImage != null) {
+        photoUrl = await _apiService.uploadProfileImage(_profileImage!);
+      }
+
+      final newUserProfile = UserProfile(
+        uid: uid,
+        name: _nameController.text,
+        phone: _phoneController.text,
+        userPhotoUrl: photoUrl,
+      );
+
+      await _apiService.createUserProfile(newUserProfile);
+
+      final gpsParts = _gpsController.text.split(',');
+      final latitude = double.parse(gpsParts[0].trim());
+      final longitude = double.parse(gpsParts[1].trim());
+
+      final newUserAddress = UserAddress(
+        label: 'ที่อยู่หลัก',
+        address: _addressController.text,
+        latitude: latitude,
+        longitude: longitude,
+      );
+
+      await _apiService.addUserAddress(uid, newUserAddress);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบ')),
+        );
+
+        Navigator.of(context).pop();
+      }
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message ?? 'Auth Error')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -77,7 +177,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
               ),
               const SizedBox(height: 32),
 
-              // ส่วนเลือกรูปโปรไฟล์
               Center(
                 child: GestureDetector(
                   onTap: _pickImage,
@@ -99,7 +198,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
               ),
               const SizedBox(height: 32),
 
-              // ฟอร์มสมัคร
               _buildTextField(
                 label: 'ชื่อ-นามสกุล',
                 controller: _nameController,
@@ -108,6 +206,11 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
                 label: 'เบอร์โทร',
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
+              ),
+              _buildTextField(
+                label: 'อีเมล',
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
               ),
               _buildTextField(
                 label: 'รหัสผ่าน',
@@ -125,7 +228,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
                 maxLines: 3,
               ),
 
-              // ช่อง GPS ที่มีไอคอนให้กด
               const Text(
                 'GPS',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
@@ -133,7 +235,7 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
               const SizedBox(height: 8),
               TextFormField(
                 controller: _gpsController,
-                readOnly: true, // ทำให้พิมพ์แก้ไขไม่ได้
+                readOnly: true,
                 decoration: _inputDecoration().copyWith(
                   hintText: 'เลือกจากแผนที่',
                   suffixIcon: IconButton(
@@ -147,34 +249,26 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
               ),
               const SizedBox(height: 32),
 
-              // ปุ่มสมัครสมาชิก
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                            const DeliveryMainScreen(), // ไปที่หน้าหลักของการส่งของ
-                      ),
-                    );
-                  },
-                  child: const Text('สมัครสมาชิก'),
+                  onPressed: _isLoading ? null : _register,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('สมัครสมาชิก'),
                 ),
               ),
               const SizedBox(height: 24),
 
-              // ลิงก์สำหรับเข้าสู่ระบบ
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const Text('คุณมีบัญชีอยู่แล้ว? '),
                   GestureDetector(
-                    onTap: () {
-                      // TODO: นำทางกลับไปหน้า Login
-                      Navigator.of(context).pop();
-                    },
+                    onTap: () => Navigator.of(context).pop(),
                     child: Text(
                       'เข้าสู่ระบบ',
                       style: TextStyle(
@@ -192,7 +286,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
     );
   }
 
-  // Widget สำหรับสร้างฟอร์ม เพื่อลดการเขียนโค้ดซ้ำ
   Widget _buildTextField({
     required String label,
     required TextEditingController controller,
@@ -220,7 +313,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
     );
   }
 
-  // ฟังก์ชันสำหรับตกแต่ง TextFormField (เหมือนกับหน้า Login)
   InputDecoration _inputDecoration() {
     return InputDecoration(
       filled: true,
