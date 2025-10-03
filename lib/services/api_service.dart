@@ -8,7 +8,7 @@ import 'package:move_delivery/models/user_model.dart';
 import 'package:cloudinary_public/cloudinary_public.dart';
 
 class ApiService {
-  static const String _baseUrl = 'http://10.0.2.2:3000';
+  static const String _baseUrl = 'http://10.0.2.2:3000'; //เชื่อมต่อกับ backend
 
   Future<String?> uploadProfileImage(File imageFile) async {
     final cloudinary = CloudinaryPublic('ddl3wobhb', 'Move_Upload');

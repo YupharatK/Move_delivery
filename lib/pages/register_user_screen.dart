@@ -1,17 +1,17 @@
+// register_user_screen.dart (ฉบับแก้ไขสมบูรณ์)
+
 import 'dart:io';
+import 'package:cloudinary_public/cloudinary_public.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-// import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-// Import ไฟล์ Model และ Service ที่เราสร้างขึ้น
-import 'package:move_delivery/models/user_model.dart';
-import 'package:move_delivery/services/api_service.dart';
+// [ลบ] ไม่จำเป็นต้องใช้ Firebase Storage แล้ว
+// import 'package:firebase_storage/firebase_storage.dart';
 
-// Import หน้าจออื่นๆ (Note: We still need to keep the imports even if we don't use DeliveryMainScreen anymore,
-// unless we are sure it's not needed anywhere else in the file.)
-import 'package:move_delivery/pages/User/delivery_main_screen.dart'; // ยังคงไว้แต่ไม่ได้ใช้ในส่วน Navigator.pushReplacement
 import 'package:move_delivery/pages/User/location_picker_screen.dart';
+import 'package:move_delivery/pages/login_page.dart';
 
 class RegisterUserScreen extends StatefulWidget {
   const RegisterUserScreen({super.key});
@@ -21,11 +21,9 @@ class RegisterUserScreen extends StatefulWidget {
 }
 
 class _RegisterUserScreenState extends State<RegisterUserScreen> {
-  // State
   File? _profileImage;
   bool _isLoading = false;
 
-  // Controllers
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
@@ -33,9 +31,6 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
   final _confirmPasswordController = TextEditingController();
   final _addressController = TextEditingController();
   final _gpsController = TextEditingController();
-
-  // สร้าง instance ของ ApiService ไว้ใช้งาน
-  final _apiService = ApiService();
 
   @override
   void dispose() {
@@ -69,11 +64,28 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
       final latitude = result['latitude'] as double;
       final longitude = result['longitude'] as double;
       _gpsController.text = '$latitude, $longitude';
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('เลือกพิกัดสำเร็จ! กรุณากรอกรายละเอียดที่อยู่'),
+    }
+  }
+
+  // [ย้ายมานี่] ย้ายฟังก์ชันอัปโหลดมาไว้ตรงนี้เพื่อให้เป็นระเบียบ
+  Future<String> _uploadImageToCloudinary(File imageFile) async {
+    final cloudinary = CloudinaryPublic(
+      'ddl3wobhb',
+      'Move_Upload',
+      cache: false,
+    );
+    try {
+      CloudinaryResponse response = await cloudinary.uploadFile(
+        CloudinaryFile.fromFile(
+          imageFile.path,
+          resourceType: CloudinaryResourceType.Image,
         ),
       );
+      return response.secureUrl;
+    } on CloudinaryException catch (e) {
+      print(e.message);
+      print(e.request);
+      throw Exception('Failed to upload image to Cloudinary');
     }
   }
 
@@ -97,6 +109,7 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
     setState(() => _isLoading = true);
 
     try {
+      // 1. สร้างผู้ใช้ใน Firebase Authentication
       final userCredential = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(
             email: _emailController.text.trim(),
@@ -104,39 +117,47 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
           );
       final uid = userCredential.user!.uid;
 
-      String? photoUrl;
+      // 2. [แก้ไข] อัปโหลดรูปภาพไปยัง Cloudinary
+      String? photoUrl; // สร้างตัวแปรมารับ URL
       if (_profileImage != null) {
-        photoUrl = await _apiService.uploadProfileImage(_profileImage!);
+        // ถ้ามีรูปที่เลือกไว้ ให้เรียกฟังก์ชันอัปโหลด
+        photoUrl = await _uploadImageToCloudinary(_profileImage!);
       }
 
-      final newUserProfile = UserProfile(
-        uid: uid,
-        name: _nameController.text,
-        phone: _phoneController.text,
-        userPhotoUrl: photoUrl,
-      );
-
-      await _apiService.createUserProfile(newUserProfile);
-
+      // 3. บันทึกข้อมูล Profile และที่อยู่ ลงใน Cloud Firestore
       final gpsParts = _gpsController.text.split(',');
       final latitude = double.parse(gpsParts[0].trim());
       final longitude = double.parse(gpsParts[1].trim());
 
-      final newUserAddress = UserAddress(
-        label: 'ที่อยู่หลัก',
-        address: _addressController.text,
-        latitude: latitude,
-        longitude: longitude,
-      );
+      final userData = {
+        'uid': uid,
+        'name': _nameController.text,
+        'phone': _phoneController.text,
+        'email': _emailController.text.trim(),
+        'userPhotoUrl': photoUrl, // [แก้ไข] ใช้ตัวแปรที่ได้รับ URL มาแล้ว
+        'createdAt': Timestamp.now(),
+        'addresses': [
+          {
+            'label': 'ที่อยู่หลัก',
+            'address': _addressController.text,
+            'location': GeoPoint(latitude, longitude),
+          },
+        ],
+      };
 
-      await _apiService.addUserAddress(uid, newUserAddress);
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .set(userData);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบ')),
         );
-
-        Navigator.of(context).pop();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (ctx) => const LoginScreen()),
+          (route) => false,
+        );
       }
     } on FirebaseAuthException catch (e) {
       ScaffoldMessenger.of(
@@ -153,6 +174,7 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ส่วน UI ทั้งหมดของคุณถูกต้องดีแล้ว ไม่ต้องแก้ไขครับ
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
