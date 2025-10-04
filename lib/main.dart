@@ -10,7 +10,7 @@ void main() async {
   await Firebase.initializeApp(
     // 3. เรียกใช้และรอจนกว่าจะเชื่อมต่อสำเร็จ
     options: DefaultFirebaseOptions.currentPlatform,
-  );
+  ); 
   runApp(const MyApp());
 }
 

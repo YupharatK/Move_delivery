@@ -1,36 +1,40 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:move_delivery/pages/User/Sender/product_details_screen.dart';
 
-// เปลี่ยนเป็น StatelessWidget เพราะไม่มี State ภายในตัวเองแล้ว
-class SearchReceiverScreen extends StatelessWidget {
+class SearchReceiverScreen extends StatefulWidget {
   const SearchReceiverScreen({super.key});
 
-  // ข้อมูลตัวอย่าง (ย้ายมาไว้ที่นี่ก่อนเพื่อความง่าย)
-  final List<Map<String, String>> _mockResults = const [
-    {
-      'name': 'รินดา สวยมาก',
-      'phone': '0911111111',
-      'address': 'ที่อยู่หลัก',
-      'imageUrl': '',
-    },
-    {
-      'name': 'สมชาย ใจดี',
-      'phone': '0822222222',
-      'address': 'ที่ทำงาน',
-      'imageUrl': '',
-    },
-  ];
+  @override
+  State<SearchReceiverScreen> createState() => _SearchReceiverScreenState();
+}
+
+class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
+  String _searchPhone = "";
+
+  String _normalizePhone(String s) =>
+      s.replaceAll(RegExp(r'[^0-9]'), ''); // เก็บเฉพาะตัวเลข
 
   @override
   Widget build(BuildContext context) {
-    // ไม่มี Scaffold, ไม่มี AppBar แล้ว
+    final String normalized = _normalizePhone(_searchPhone);
+
+    final Query<Map<String, dynamic>> query = (normalized.isEmpty)
+        ? FirebaseFirestore.instance.collection('users')
+        : FirebaseFirestore.instance
+              .collection('users')
+              .where('phone', isEqualTo: normalized);
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ค้นหาด้วยเบอร์โทร
           TextFormField(
-            // ... โค้ด TextFormField เหมือนเดิม ...
+            keyboardType: TextInputType.phone,
+            onChanged: (v) => setState(() => _searchPhone = v.trim()),
             decoration: InputDecoration(
               hintText: 'กรอกหมายเลขโทรศัพท์ของผู้รับ',
               filled: true,
@@ -43,19 +47,87 @@ class SearchReceiverScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
+
           const Text(
             'เลือกผู้รับ',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
+
           Expanded(
-            child: ListView.builder(
-              itemCount: _mockResults.length,
-              itemBuilder: (context, index) {
-                return _buildResultTile(
-                  context,
-                  _mockResults[index],
-                ); // ส่ง context ไปด้วย
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: query.snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return const Center(
+                    child: Text('เกิดข้อผิดพลาดในการโหลดข้อมูล'),
+                  );
+                }
+                if (!snapshot.hasData) {
+                  return const Center(child: Text('ไม่พบผู้รับที่ค้นหา'));
+                }
+
+                final currentUid = FirebaseAuth.instance.currentUser?.uid;
+                final allDocs = snapshot.data!.docs;
+
+                // ✅ กรอง “ไม่แสดงตัวเอง”
+                final docs = (currentUid == null)
+                    ? allDocs
+                    : allDocs.where((d) => d.id != currentUid).toList();
+
+                if (docs.isEmpty) {
+                  return const Center(child: Text('ไม่พบผู้รับที่ค้นหา'));
+                }
+
+                return ListView.builder(
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final uid = doc.id; // ใช้ doc.id เป็น receiverUid
+                    final data = doc.data();
+
+                    final name = (data['name'] ?? '-') as String;
+                    // แนะนำให้เก็บ phone ในฐานข้อมูลแบบ normalized (ตัวเลขล้วน)
+                    final phone = (data['phone'] ?? '-') as String;
+                    final photo = (data['userPhotoUrl'] ?? '') as String;
+
+                    // addresses: [{label, address, location:[lat,lng] หรือ GeoPoint}]
+                    final List<dynamic> addresses =
+                        (data['addresses'] as List<dynamic>? ?? []);
+
+                    String addressLabel = '-';
+                    String addressText = '-';
+                    String coordsText = '';
+
+                    if (addresses.isNotEmpty && addresses.first is Map) {
+                      final addr = (addresses.first as Map)
+                          .cast<String, dynamic>();
+                      addressLabel = (addr['label'] ?? '-') as String;
+                      addressText = (addr['address'] ?? '-') as String;
+
+                      final loc = addr['location'];
+                      if (loc is List && loc.length >= 2) {
+                        coordsText = '(${loc[0]}, ${loc[1]})';
+                      } else if (loc is GeoPoint) {
+                        coordsText = '(${loc.latitude}, ${loc.longitude})';
+                      }
+                    }
+
+                    return _buildResultTile(
+                      context: context,
+                      receiverUid: uid,
+                      name: name,
+                      phone: phone,
+                      photoUrl: photo,
+                      addressLabel: addressLabel,
+                      addressText: addressText,
+                      coordsText: coordsText,
+                    );
+                  },
+                );
               },
             ),
           ),
@@ -64,9 +136,16 @@ class SearchReceiverScreen extends StatelessWidget {
     );
   }
 
-  // Widget สำหรับสร้างรายการผลลัพธ์แต่ละอัน
-  Widget _buildResultTile(BuildContext context, Map<String, String> userData) {
-    // ... โค้ด _buildResultTile เหมือนเดิมทุกประการ ...
+  Widget _buildResultTile({
+    required BuildContext context,
+    required String receiverUid,
+    required String name,
+    required String phone,
+    required String photoUrl,
+    required String addressLabel,
+    required String addressText,
+    required String coordsText,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12.0),
       padding: const EdgeInsets.all(12.0),
@@ -87,31 +166,44 @@ class SearchReceiverScreen extends StatelessWidget {
           CircleAvatar(
             radius: 25,
             backgroundColor: Colors.grey[300],
-            child: const Icon(Icons.person, color: Colors.white),
+            backgroundImage: (photoUrl.isNotEmpty)
+                ? NetworkImage(photoUrl)
+                : null,
+            child: (photoUrl.isEmpty)
+                ? const Icon(Icons.person, color: Colors.white)
+                : null,
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ชื่อ
                 Text(
-                  userData['name']!,
+                  name,
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
                   ),
                 ),
+                // เบอร์โทร
                 Text(
-                  'เบอร์โทร ${userData['phone']!}',
+                  'เบอร์โทร $phone',
                   style: TextStyle(color: Colors.grey[600]),
                 ),
+                // ที่อยู่ + พิกัด (สั้น ๆ)
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(Icons.location_on, color: Colors.grey[600], size: 14),
                     const SizedBox(width: 4),
-                    Text(
-                      userData['address']!,
-                      style: TextStyle(color: Colors.grey[600]),
+                    Expanded(
+                      child: Text(
+                        '$addressLabel • $addressText'
+                        '${coordsText.isNotEmpty ? ' $coordsText' : ''}',
+                        style: TextStyle(color: Colors.grey[600]),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -120,10 +212,12 @@ class SearchReceiverScreen extends StatelessWidget {
           ),
           ElevatedButton(
             onPressed: () {
+              // ✅ ส่ง uid ไปหน้าถัดไป
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => const ProductDetailsScreen(),
+                  builder: (_) =>
+                      ProductDetailsScreen(receiverUid: receiverUid),
                 ),
               );
             },
