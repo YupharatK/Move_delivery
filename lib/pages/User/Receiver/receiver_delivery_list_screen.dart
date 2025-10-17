@@ -157,7 +157,8 @@ class _ReceiverDeliveryListScreenState
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => const DeliveryTrackingScreen(),
+                      builder: (context) =>
+                          const DeliveryTrackingScreen(orderId: ''),
                     ),
                   );
                 },

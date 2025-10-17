@@ -1,7 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:move_delivery/pages/User/Sender/delivery_tracking_screen.dart';
+import 'package:move_delivery/pages/User/Sender/sender_confirm_screen.dart';
 
-// 1. ตรวจสอบให้แน่ใจว่า Widget หลักเป็น StatefulWidget
 class SenderTrackingListScreen extends StatefulWidget {
   const SenderTrackingListScreen({super.key});
 
@@ -10,121 +12,264 @@ class SenderTrackingListScreen extends StatefulWidget {
       _SenderTrackingListScreenState();
 }
 
-// State Class คือที่ที่เราจะเก็บข้อมูลและสร้าง UI
 class _SenderTrackingListScreenState extends State<SenderTrackingListScreen> {
-  // 2. ข้อมูล (_trackingItems) ต้องอยู่ภายใน State Class นี้
-  final List<Map<String, String>> _trackingItems = [
-    {
-      'item': 'ตุ๊กตาเป็ด',
-      'receiver': 'รินดา สวยมาก',
-      'phone': '0911111111',
-      'address': 'ที่อยู่ผู้รับ',
-      'imageUrl': 'assets/images/duck_doll.png',
-    },
-    {
-      'item': 'หนังสือ Flutter',
-      'receiver': 'สมชาย ใจดี',
-      'phone': '0822222222',
-      'address': 'ที่ทำงาน',
-      'imageUrl': 'assets/images/book.png',
-    },
-  ];
+  Query<Map<String, dynamic>> _ordersQuery(String uid) => FirebaseFirestore
+      .instance
+      .collection('orders')
+      .withConverter<Map<String, dynamic>>(
+        fromFirestore: (s, _) => s.data() ?? <String, dynamic>{},
+        toFirestore: (m, _) => m,
+      )
+      .where('userId', isEqualTo: uid) // ✅ เฉพาะออเดอร์ที่เราส่ง
+      // ใช้ docId กัน createdAt ชนิดเพี้ยน
+      .orderBy(FieldPath.documentId, descending: true);
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
+      appBar: AppBar(title: const Text('ติดตามสถานะการส่งของฉัน')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: ListView.builder(
-          itemCount: _trackingItems.length,
-          itemBuilder: (context, index) {
-            // build() สามารถเรียกใช้ _buildTrackingItemCard ได้เพราะอยู่ class เดียวกัน
-            return _buildTrackingItemCard(_trackingItems[index]);
-          },
-        ),
-      ),
-    );
-  }
+        child: user == null
+            ? const Center(child: Text('กรุณาเข้าสู่ระบบ'))
+            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _ordersQuery(user.uid).snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Firestore error: ${snapshot.error}'),
+                    );
+                  }
+                  final orders = snapshot.data?.docs ?? [];
+                  if (orders.isEmpty) {
+                    return const Center(
+                      child: Text('ยังไม่มีคำสั่งซื้อของคุณ'),
+                    );
+                  }
 
-  // 3. ฟังก์ชัน Helper (_buildTrackingItemCard) ก็ต้องอยู่ภายใน State Class นี้ด้วย
-  Widget _buildTrackingItemCard(Map<String, String> itemData) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                itemData['imageUrl']!,
-                width: 80,
-                height: 80,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    width: 80,
-                    height: 80,
-                    color: Colors.grey[200],
-                    child: const Icon(Icons.image),
+                  return ListView.builder(
+                    itemCount: orders.length,
+                    itemBuilder: (context, index) {
+                      final d = orders[index];
+                      final orderId = d.id;
+                      final order = d.data();
+                      return _OrderCard(orderId: orderId, order: order);
+                    },
                   );
                 },
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'รายละเอียดการจัดส่ง',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 4),
-                  Text('รายการ : ${itemData['item']}'),
-                  Text('ผู้รับ : ${itemData['receiver']}'),
-                  Text('เบอร์โทร : ${itemData['phone']}'),
-                  Row(
+      ),
+    );
+  }
+}
+
+class _OrderCard extends StatelessWidget {
+  const _OrderCard({required this.orderId, required this.order});
+  final String orderId;
+  final Map<String, dynamic> order;
+
+  Future<Map<String, dynamic>?> _fetchFirstItem() async {
+    final qs = await FirebaseFirestore.instance
+        .collection('orders')
+        .doc(orderId)
+        .collection('items')
+        .withConverter<Map<String, dynamic>>(
+          fromFirestore: (s, _) => s.data() ?? <String, dynamic>{},
+          toFirestore: (m, _) => m,
+        )
+        .limit(1)
+        .get();
+    if (qs.docs.isEmpty) return null;
+    return qs.docs.first.data();
+  }
+
+  Future<Map<String, dynamic>?> _fetchReceiver() async {
+    final rid = (order['receiverId'] ?? '').toString();
+    if (rid.isEmpty) return null;
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(rid)
+        .get();
+    return doc.data();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = (order['status'] ?? '-').toString();
+    final total = (order['total'] is num)
+        ? (order['total'] as num).toDouble()
+        : 0.0;
+    final itemCount = (order['itemCount'] is num)
+        ? (order['itemCount'] as num).toInt()
+        : 1;
+    final ts = order['createdAt'];
+    final createdAt = (ts is Timestamp) ? ts.toDate() : null;
+
+    // ✅ ตรวจว่ามีรูปยืนยัน “ก่อนส่ง” แล้วหรือยัง
+    // ถ้าคุณใช้ชื่อฟิลด์เดิมเป็น senderPhotoUrl เปลี่ยนบรรทัดนี้ได้เป็น:
+    // final pendingPhotoUrl = (order['senderPhotoUrl'] ?? '').toString();
+    final pendingPhotoUrl = (order['pendingPhotoUrl'] ?? '').toString();
+    final bool isPendingConfirmed = pendingPhotoUrl.isNotEmpty;
+
+    return FutureBuilder<List<Map<String, dynamic>?>>(
+      future: Future.wait([_fetchFirstItem(), _fetchReceiver()]),
+      builder: (context, snap) {
+        final firstItem = (snap.data != null) ? snap.data![0] : null;
+        final receiver = (snap.data != null) ? snap.data![1] : null;
+
+        final name = (firstItem?['name'] ?? '—').toString();
+        final img = (firstItem?['imageUrl'] ?? '').toString();
+        final receiverName = (receiver?['name'] ?? '—').toString();
+        final receiverPhone = (receiver?['phone'] ?? '—').toString();
+
+        return Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.only(bottom: 16),
+          child: Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // รูปสินค้าแรก
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: (img.isNotEmpty)
+                      ? Image.network(
+                          img,
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => _imgFallback(),
+                        )
+                      : _imgFallback(),
+                ),
+                const SizedBox(width: 12),
+
+                // เนื้อหา
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.location_on,
-                        color: Theme.of(context).primaryColor,
-                        size: 16,
+                      // หัวข้อ + สถานะ
+                      Row(
+                        children: [
+                          const Text(
+                            'รายละเอียดการจัดส่ง',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey.withOpacity(.08),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              status,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blueGrey[700],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          itemData['address']!,
-                          overflow: TextOverflow.ellipsis,
+                      const SizedBox(height: 6),
+                      Text(
+                        'สินค้า: $name${itemCount > 1 ? " (+${itemCount - 1} ชิ้น)" : ""}',
+                      ),
+                      Text('ผู้รับ: $receiverName'),
+                      Text('เบอร์โทร: $receiverPhone'),
+                      Text('ยอดรวม: ${total.toStringAsFixed(2)} ฿'),
+                      if (createdAt != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.schedule,
+                              size: 16,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${createdAt.day.toString().padLeft(2, '0')}/'
+                              '${createdAt.month.toString().padLeft(2, '0')}/'
+                              '${createdAt.year} '
+                              '${createdAt.hour.toString().padLeft(2, '0')}:'
+                              '${createdAt.minute.toString().padLeft(2, '0')}',
+                              style: const TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+
+                      // ▶️ ปุ่ม: ต้องถ่ายรูปก่อนส่งให้เรียบร้อยก่อน จึง “เช็คสถานะ” ได้
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          icon: Icon(
+                            isPendingConfirmed
+                                ? Icons.check_circle
+                                : Icons.camera_alt,
+                          ),
+                          label: Text(
+                            isPendingConfirmed ? 'เช็คสถานะ' : 'ถ่ายรูปก่อนส่ง',
+                          ),
+                          onPressed: () {
+                            if (isPendingConfirmed) {
+                              // มีรูปยืนยันแล้ว → ไปหน้าเช็คสถานะ
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      DeliveryTrackingScreen(orderId: orderId),
+                                ),
+                              );
+                            } else {
+                              // ยังไม่มีรูป → ไปถ่ายรูปก่อนส่ง
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => SenderConfirmPhotoScreen(
+                                    orderId: orderId,
+                                  ),
+                                ),
+                              );
+                            }
+                          },
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                const DeliveryTrackingScreen(),
-                          ),
-                        );
-                      },
-                      child: const Text('เช็คสถานะ'),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
-} // <--- สิ้นสุด State Class
+
+  Widget _imgFallback() => Container(
+    width: 80,
+    height: 80,
+    color: Colors.grey[200],
+    child: const Icon(Icons.image),
+  );
+}

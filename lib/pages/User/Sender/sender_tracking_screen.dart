@@ -1,16 +1,19 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/User/Sender/delivery_tracking_screen.dart';
+import 'package:move_delivery/pages/User/Sender/sender_confirm_screen.dart';
 import 'package:move_delivery/pages/User/Sender/sender_tracking_screen.dart';
 
-class ItemsToDispatchScreen extends StatefulWidget {
-  const ItemsToDispatchScreen({super.key});
+class SenderTrackingListScreen extends StatefulWidget {
+  const SenderTrackingListScreen({super.key});
 
   @override
-  State<ItemsToDispatchScreen> createState() => _ItemsToDispatchScreenState();
+  State<SenderTrackingListScreen> createState() =>
+      _SenderTrackingListScreenState();
 }
 
-class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
+class _SenderTrackingListScreenState extends State<SenderTrackingListScreen> {
   Query<Map<String, dynamic>> _ordersQuery(String uid) => FirebaseFirestore
       .instance
       .collection('orders')
@@ -19,113 +22,55 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
         toFirestore: (m, _) => m,
       )
       .where('userId', isEqualTo: uid)
-      .orderBy('createdAt', descending: true);
+      .orderBy(FieldPath.documentId, descending: true); // กัน createdAt เพี้ยน
 
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).primaryColor,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'รายการที่ต้องจัดส่ง',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
-      ),
-      body: user == null
-          ? const Center(child: Text('กรุณาเข้าสู่ระบบ'))
-          : Padding(
-              padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 0),
-              child: Column(
-                children: [
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        // TODO: ลิงก์ไปหน้าเลือกสินค้า/สร้างออเดอร์ใหม่
-                        debugPrint('Add button pressed!');
-                      },
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('เพิ่ม'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+      appBar: AppBar(title: const Text('ติดตามสถานะการส่งของฉัน')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: user == null
+            ? const Center(child: Text('กรุณาเข้าสู่ระบบ'))
+            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _ordersQuery(user.uid).snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Firestore error: ${snapshot.error}'),
+                    );
+                  }
+                  final orders = snapshot.data?.docs ?? [];
+                  if (orders.isEmpty) {
+                    return const Center(
+                      child: Text('ยังไม่มีคำสั่งซื้อของคุณ'),
+                    );
+                  }
 
-                  // ===== Stream orders ของฉัน =====
-                  Expanded(
-                    child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _ordersQuery(user.uid).snapshots(),
-                      builder: (context, snap) {
-                        if (snap.connectionState == ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
-                        if (snap.hasError) {
-                          return Center(
-                            child: Text('เกิดข้อผิดพลาด: ${snap.error}'),
-                          );
-                        }
-                        final docs = snap.data?.docs ?? [];
-                        if (docs.isEmpty) {
-                          return const Center(
-                            child: Text('ยังไม่มีคำสั่งซื้อ'),
-                          );
-                        }
-
-                        return ListView.builder(
-                          itemCount: docs.length,
-                          itemBuilder: (context, index) {
-                            final d = docs[index];
-                            final orderId = d.id;
-                            final order = d.data();
-                            return _OrderCard(orderId: orderId, order: order);
-                          },
-                        );
-                      },
-                    ),
-                  ),
-
-                  // ปุ่มส่งสินค้า (คุณจะทำเป็นส่งหลาย order หรือเลือกทีละ order ก็ได้)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const SenderTrackingListScreen(),
-                            ),
-                          );
-                        },
-                        child: const Text('ส่งสินค้า'),
-                      ),
-                    ),
-                  ),
-                ],
+                  return ListView.builder(
+                    itemCount: orders.length,
+                    itemBuilder: (context, index) {
+                      final d = orders[index];
+                      final orderId = d.id;
+                      final order = d.data();
+                      return _OrderCard(orderId: orderId, order: order);
+                    },
+                  );
+                },
               ),
-            ),
+      ),
     );
   }
 }
 
-/// การ์ดแสดงออเดอร์ 1 รายการ + ดึง 1 ไอเท็มแรก + ชื่อผู้รับ
 class _OrderCard extends StatelessWidget {
-  const _OrderCard({required this.orderId, required this.order, Key? key})
-    : super(key: key);
-
+  const _OrderCard({required this.orderId, required this.order});
   final String orderId;
   final Map<String, dynamic> order;
 
@@ -157,14 +102,18 @@ class _OrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = (order['status'] ?? '-').toString();
-    final itemCount = (order['itemCount'] is num)
-        ? (order['itemCount'] as num).toInt()
-        : 1;
     final total = (order['total'] is num)
         ? (order['total'] as num).toDouble()
         : 0.0;
+    final itemCount = (order['itemCount'] is num)
+        ? (order['itemCount'] as num).toInt()
+        : 1;
     final ts = order['createdAt'];
     final createdAt = (ts is Timestamp) ? ts.toDate() : null;
+
+    // ฟิลด์รูปยืนยันจากผู้ส่ง (ถ้ามีถือว่ายืนยันแล้ว)
+    final String senderPhotoUrl = (order['senderPhotoUrl'] ?? '').toString();
+    final bool isConfirmedBySender = senderPhotoUrl.isNotEmpty;
 
     return FutureBuilder<List<Map<String, dynamic>?>>(
       future: Future.wait([_fetchFirstItem(), _fetchReceiver()]),
@@ -174,13 +123,8 @@ class _OrderCard extends StatelessWidget {
 
         final name = (firstItem?['name'] ?? '—').toString();
         final img = (firstItem?['imageUrl'] ?? '').toString();
-        final price = (firstItem?['price'] is num)
-            ? (firstItem?['price'] as num).toDouble()
-            : null;
-
         final receiverName = (receiver?['name'] ?? '—').toString();
         final receiverPhone = (receiver?['phone'] ?? '—').toString();
-        // ถ้าอยากมีที่อยู่ ให้ดึงจาก receiver['addresses'][0] เช่นเดียวกับหน้า detail
 
         return Card(
           elevation: 2,
@@ -207,12 +151,12 @@ class _OrderCard extends StatelessWidget {
                       : _imgFallback(),
                 ),
                 const SizedBox(width: 12),
-                // เนื้อหาการ์ด
+                // เนื้อหา
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // หัวข้อ
+                      // แถวหัวเรื่อง + สถานะ
                       Row(
                         children: [
                           const Text(
@@ -237,28 +181,18 @@ class _OrderCard extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.blueGrey[700],
-                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 6),
-
-                      // สินค้า + จำนวนชิ้น
                       Text(
-                        'สินค้า: $name ${itemCount > 1 ? '(+${itemCount - 1} ชิ้น)' : ''}',
+                        'สินค้า: $name${itemCount > 1 ? " (+${itemCount - 1} ชิ้น)" : ""}',
                       ),
-                      if (price != null)
-                        Text('ราคาแรก: ${price.toStringAsFixed(2)} ฿'),
-                      Text('ยอดรวมคำสั่งซื้อ: ${total.toStringAsFixed(2)} ฿'),
-
-                      // ผู้รับ
-                      const SizedBox(height: 4),
                       Text('ผู้รับ: $receiverName'),
                       Text('เบอร์โทร: $receiverPhone'),
-
-                      // วันที่
+                      Text('ยอดรวม: ${total.toStringAsFixed(2)} ฿'),
                       if (createdAt != null) ...[
                         const SizedBox(height: 4),
                         Row(
@@ -272,7 +206,7 @@ class _OrderCard extends StatelessWidget {
                             Text(
                               '${createdAt.day.toString().padLeft(2, '0')}/'
                               '${createdAt.month.toString().padLeft(2, '0')}/'
-                              '${createdAt.year}  '
+                              '${createdAt.year} '
                               '${createdAt.hour.toString().padLeft(2, '0')}:'
                               '${createdAt.minute.toString().padLeft(2, '0')}',
                               style: const TextStyle(color: Colors.grey),
@@ -280,6 +214,46 @@ class _OrderCard extends StatelessWidget {
                           ],
                         ),
                       ],
+                      const SizedBox(height: 8),
+
+                      // ปุ่มตามเงื่อนไข
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          icon: Icon(
+                            isConfirmedBySender
+                                ? Icons.check_circle
+                                : Icons.camera_alt,
+                          ),
+                          label: Text(
+                            isConfirmedBySender
+                                ? 'เช็คสถานะ'
+                                : 'ยืนยันด้วยรูปก่อน',
+                          ),
+                          onPressed: () {
+                            if (isConfirmedBySender) {
+                              // ไปหน้า tracking ได้เลย
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      DeliveryTrackingScreen(orderId: orderId),
+                                ),
+                              );
+                            } else {
+                              // ต้องยืนยันรูปก่อน
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => SenderConfirmPhotoScreen(
+                                    orderId: orderId,
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
                     ],
                   ),
                 ),
