@@ -1,7 +1,12 @@
+// delivery_list_screen.dart (Complete with Address Fix)
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:move_delivery/pages/User/Sender/sender_tracking_screen.dart';
+// Import SearchReceiverScreen
+import 'package:move_delivery/pages/User/Sender/search_receiver_screen.dart';
+// Import the CORRECT SenderTrackingListScreen
+import 'package:move_delivery/pages/User/Sender/sender_delivery_tracking_screen.dart'; // Make sure this is the correct filename
 
 class ItemsToDispatchScreen extends StatefulWidget {
   const ItemsToDispatchScreen({super.key});
@@ -33,13 +38,13 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
-          'รายการที่ต้องจัดส่ง',
+          'Items to Dispatch', // Changed to English for clarity
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
       ),
       body: user == null
-          ? const Center(child: Text('กรุณาเข้าสู่ระบบ'))
+          ? const Center(child: Text('Please log in'))
           : Padding(
               padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 0),
               child: Column(
@@ -47,12 +52,18 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: ElevatedButton.icon(
+                      // Updated onPressed for the "Add" button
                       onPressed: () {
-                        // TODO: ลิงก์ไปหน้าเลือกสินค้า/สร้างออเดอร์ใหม่
-                        debugPrint('Add button pressed!');
+                        // Navigate to the screen for searching/selecting a receiver
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SearchReceiverScreen(),
+                          ),
+                        );
                       },
                       icon: const Icon(Icons.add, size: 18),
-                      label: const Text('เพิ่ม'),
+                      label: const Text('Add'), // Changed to English
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                       ),
@@ -60,7 +71,7 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ===== Stream orders ของฉัน =====
+                  // ===== Stream my orders =====
                   Expanded(
                     child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: _ordersQuery(user.uid).snapshots(),
@@ -71,15 +82,11 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
                           );
                         }
                         if (snap.hasError) {
-                          return Center(
-                            child: Text('เกิดข้อผิดพลาด: ${snap.error}'),
-                          );
+                          return Center(child: Text('Error: ${snap.error}'));
                         }
                         final docs = snap.data?.docs ?? [];
                         if (docs.isEmpty) {
-                          return const Center(
-                            child: Text('ยังไม่มีคำสั่งซื้อ'),
-                          );
+                          return const Center(child: Text('No orders yet'));
                         }
 
                         return ListView.builder(
@@ -95,22 +102,25 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
                     ),
                   ),
 
-                  // ปุ่มส่งสินค้า (คุณจะทำเป็นส่งหลาย order หรือเลือกทีละ order ก็ได้)
+                  // Button to go to tracking list
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16.0),
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: () {
+                          // Ensure navigation goes to the CORRECT tracking screen
                           Navigator.push(
                             context,
                             MaterialPageRoute(
+                              // Use the screen that checks 'pendingPhotoUrl'
                               builder: (context) =>
                                   const SenderTrackingListScreen(),
                             ),
                           );
                         },
-                        child: const Text('ส่งสินค้า'),
+                        // Changed text for clarity
+                        child: const Text('Go to Tracking List'),
                       ),
                     ),
                   ),
@@ -121,7 +131,7 @@ class _ItemsToDispatchScreenState extends State<ItemsToDispatchScreen> {
   }
 }
 
-/// การ์ดแสดงออเดอร์ 1 รายการ + ดึง 1 ไอเท็มแรก + ชื่อผู้รับ
+/// Card showing 1 order + fetch first item + receiver name + ADDRESS
 class _OrderCard extends StatelessWidget {
   const _OrderCard({required this.orderId, required this.order, Key? key})
     : super(key: key);
@@ -154,6 +164,27 @@ class _OrderCard extends StatelessWidget {
     return doc.data();
   }
 
+  // Helper to extract address string
+  String _extractAddressText(Map<String, dynamic>? receiverData) {
+    if (receiverData == null) return '-';
+    final List<dynamic> addresses =
+        (receiverData['addresses'] as List<dynamic>? ?? []);
+    if (addresses.isNotEmpty && addresses.first is Map) {
+      final a = (addresses.first as Map).cast<String, dynamic>();
+      final label = (a['label'] ?? '-') as String;
+      final addressText = (a['address'] ?? '-') as String;
+      // Combine label and address for display
+      if (label != '-' && addressText != '-') {
+        return '$label • $addressText';
+      } else if (addressText != '-') {
+        return addressText;
+      } else if (label != '-') {
+        return label; // Less likely, but handle just in case
+      }
+    }
+    return '-'; // Default if no address found
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = (order['status'] ?? '-').toString();
@@ -169,18 +200,43 @@ class _OrderCard extends StatelessWidget {
     return FutureBuilder<List<Map<String, dynamic>?>>(
       future: Future.wait([_fetchFirstItem(), _fetchReceiver()]),
       builder: (context, snap) {
-        final firstItem = (snap.data != null) ? snap.data![0] : null;
-        final receiver = (snap.data != null) ? snap.data![1] : null;
+        // Handle loading state for futures
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Card(
+            // Show a placeholder card while loading
+            margin: EdgeInsets.only(bottom: 16),
+            child: Padding(
+              padding: EdgeInsets.all(12.0),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          );
+        }
+        // Handle error state for futures
+        if (snap.hasError) {
+          return Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            color: Colors.red.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Text('Error loading details: ${snap.error}'),
+            ),
+          );
+        }
+
+        final firstItem = (snap.data != null && snap.data!.isNotEmpty)
+            ? snap.data![0]
+            : null;
+        final receiver = (snap.data != null && snap.data!.length > 1)
+            ? snap.data![1]
+            : null;
 
         final name = (firstItem?['name'] ?? '—').toString();
         final img = (firstItem?['imageUrl'] ?? '').toString();
-        final price = (firstItem?['price'] is num)
-            ? (firstItem?['price'] as num).toDouble()
-            : null;
 
         final receiverName = (receiver?['name'] ?? '—').toString();
         final receiverPhone = (receiver?['phone'] ?? '—').toString();
-        // ถ้าอยากมีที่อยู่ ให้ดึงจาก receiver['addresses'][0] เช่นเดียวกับหน้า detail
+        // Get the address text using the helper
+        final receiverAddress = _extractAddressText(receiver);
 
         return Card(
           elevation: 2,
@@ -193,7 +249,7 @@ class _OrderCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // รูปสินค้าแรก
+                // First item image
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: (img.isNotEmpty)
@@ -207,16 +263,16 @@ class _OrderCard extends StatelessWidget {
                       : _imgFallback(),
                 ),
                 const SizedBox(width: 12),
-                // เนื้อหาการ์ด
+                // Card content
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // หัวข้อ
+                      // Header Row
                       Row(
                         children: [
                           const Text(
-                            'รายละเอียดการจัดส่ง',
+                            'Shipment Details', // Changed to English
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
@@ -245,20 +301,29 @@ class _OrderCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
 
-                      // สินค้า + จำนวนชิ้น
+                      // Item details
                       Text(
-                        'สินค้า: $name ${itemCount > 1 ? '(+${itemCount - 1} ชิ้น)' : ''}',
+                        // Changed to English
+                        'Item: $name ${itemCount > 1 ? '(+${itemCount - 1} more)' : ''}',
                       ),
-                      if (price != null)
-                        Text('ราคาแรก: ${price.toStringAsFixed(2)} ฿'),
-                      Text('ยอดรวมคำสั่งซื้อ: ${total.toStringAsFixed(2)} ฿'),
-
-                      // ผู้รับ
+                      Text(
+                        'Order Total: ${total.toStringAsFixed(2)} ฿',
+                      ), // Changed to English
+                      // Receiver details
                       const SizedBox(height: 4),
-                      Text('ผู้รับ: $receiverName'),
-                      Text('เบอร์โทร: $receiverPhone'),
+                      Text('To: $receiverName'), // Changed prefix
+                      Text('Phone: $receiverPhone'), // Changed prefix
+                      // Display the receiver address
+                      Text(
+                        'Address: $receiverAddress', // Changed prefix
+                        maxLines: 2, // Allow address to wrap if long
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.grey[700],
+                        ), // Optional styling
+                      ),
 
-                      // วันที่
+                      // Date
                       if (createdAt != null) ...[
                         const SizedBox(height: 4),
                         Row(

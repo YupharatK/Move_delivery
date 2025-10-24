@@ -1,8 +1,15 @@
+// product_details_screen.dart (Complete code using flutter_map)
+
+import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:move_delivery/pages/User/Sender/productpickerscreen.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart'
+    as latlong; // Use alias to avoid conflict
+import 'package:move_delivery/pages/User/Sender/productpickerscreen.dart'; // Ensure this path is correct
+import 'package:move_delivery/pages/User/Sender/create_product_screen.dart'; // Ensure this path is correct
 
 class ProductDetailsScreen extends StatefulWidget {
   const ProductDetailsScreen({super.key, required this.receiverUid});
@@ -13,24 +20,15 @@ class ProductDetailsScreen extends StatefulWidget {
 }
 
 class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
-  File? _productImage;
-  final _productNameController = TextEditingController();
-  final _productDetailsController = TextEditingController();
-
-  Map<String, dynamic>? _selectedProduct;
+  final List<Map<String, dynamic>> _selectedProducts = [];
   bool _isPlacingOrder = false;
 
-  @override
-  void dispose() {
-    _productNameController.dispose();
-    _productDetailsController.dispose();
-    super.dispose();
-  }
+  // Map Controller and State for flutter_map
+  final MapController _mapController = MapController();
+  latlong.LatLng? _receiverLocation; // Use latlong.LatLng
+  List<Marker> _markers = []; // Use Marker from flutter_map
 
-  Future<void> _pickImage() async {
-    debugPrint('Picking product image...');
-  }
-
+  // --- Firestore Streams ---
   Stream<DocumentSnapshot<Map<String, dynamic>>?> _senderStream() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -46,64 +44,73 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
         .snapshots();
   }
 
+  // --- Product Selection ---
   Future<void> _openProductPicker() async {
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(builder: (_) => const ProductPickerScreen()),
     );
     if (result != null) {
-      setState(() => _selectedProduct = result);
+      final existingIndex = _selectedProducts.indexWhere(
+        (p) => p['productId'] == result['productId'],
+      );
+      setState(() {
+        if (existingIndex >= 0) {
+          // Update quantity if product already in cart
+          _selectedProducts[existingIndex]['qty'] = result['qty'];
+        } else {
+          // Add new product to cart
+          _selectedProducts.add(result);
+        }
+      });
     }
   }
 
-  // -------------------- สร้างออเดอร์ --------------------
+  void _removeProduct(int index) {
+    setState(() {
+      _selectedProducts.removeAt(index);
+    });
+  }
+
+  // --- Place Order Logic ---
   Future<void> _placeOrder() async {
-    if (_selectedProduct == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('กรุณาเลือกสินค้าก่อน')));
+    if (_selectedProducts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please add products to the order first')),
+      );
       return;
     }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาเข้าสู่ระบบก่อนทำรายการ')),
+        const SnackBar(content: Text('Please log in before placing an order')),
       );
       return;
     }
     if (widget.receiverUid.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('ไม่พบผู้รับที่เลือก')));
+      ).showSnackBar(const SnackBar(content: Text('Receiver not selected')));
       return;
     }
 
-    // ดึงค่าจากสินค้าที่เลือก — ทำให้ชนิดตรงแน่นอน
-    final String productId = '${_selectedProduct!['productId']}';
-    final String name = (_selectedProduct!['name'] ?? '-').toString();
-    final String imageUrl = (_selectedProduct!['imageUrl'] ?? '').toString();
-
-    final rawPrice = _selectedProduct!['price'];
-    final double price = (rawPrice is num)
-        ? rawPrice.toDouble()
-        : double.tryParse('${rawPrice ?? ''}') ?? 0.0;
-
-    final dynamic rawQty = _selectedProduct!['qty'];
-    final int qty = (rawQty is int)
-        ? rawQty
-        : int.tryParse('${rawQty ?? '1'}') ?? 1;
-
-    // คำนวณยอด
-    final double amount = price * qty;
-    final double subtotal = amount;
-    const double discount = 0.0;
-    const double shipping = 0.0;
-    final double total = subtotal - discount + shipping;
-
     setState(() => _isPlacingOrder = true);
 
+    // Calculate totals
+    double calculatedSubtotal = 0;
+    int calculatedItemCount = 0; // Counts distinct product types
+    for (var product in _selectedProducts) {
+      final price = (product['price'] as num?)?.toDouble() ?? 0.0;
+      final qty = (product['qty'] as int?) ?? 1;
+      calculatedSubtotal += price * qty;
+      calculatedItemCount += 1; // Count each product entry as 1 item type
+    }
+    const double discount = 0.0;
+    const double shipping = 0.0;
+    final double calculatedTotal = calculatedSubtotal - discount + shipping;
+
     try {
-      // (ทางเลือก) ตรวจว่ามี receiver อยู่จริง
+      // Verify receiver exists
       final receiverDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(widget.receiverUid)
@@ -111,145 +118,295 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       if (!receiverDoc.exists) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ไม่พบผู้รับ (uid: ${widget.receiverUid})')),
+          SnackBar(
+            content: Text('Receiver not found (uid: ${widget.receiverUid})'),
+          ),
         );
         setState(() => _isPlacingOrder = false);
         return;
       }
 
       final db = FirebaseFirestore.instance;
-      final orderRef = db.collection('orders').doc(); // auto-id
-      final itemRef = orderRef.collection('items').doc(productId);
-
-      // ใช้ WriteBatch (อ่าน error ง่าย)
+      final orderRef = db.collection('orders').doc(); // Auto-generate ID
       final batch = db.batch();
 
+      // Set main order document
       batch.set(orderRef, {
         'userId': user.uid,
         'receiverId': widget.receiverUid,
         'status': 'PENDING',
-        'itemCount': 1,
-        'subtotal': subtotal,
+        'itemCount': calculatedItemCount,
+        'subtotal': calculatedSubtotal,
         'discount': discount,
         'shippingFee': shipping,
-        'total': total,
+        'total': calculatedTotal,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      batch.set(itemRef, {
-        'productId': productId,
-        'name': name,
-        'price': price,
-        'qty': qty,
-        'amount': amount,
-        'imageUrl': imageUrl,
-      });
+      // Set each item in the subcollection
+      for (var product in _selectedProducts) {
+        final productId = product['productId'] as String;
+        final itemRef = orderRef
+            .collection('items')
+            .doc(productId); // Use product ID for item doc ID
+        final name = (product['name'] ?? '-').toString();
+        final imageUrl = (product['imageUrl'] ?? '').toString();
+        final price = (product['price'] as num?)?.toDouble() ?? 0.0;
+        final qty = (product['qty'] as int?) ?? 1;
+        final amount = price * qty;
+        batch.set(itemRef, {
+          'productId': productId,
+          'name': name,
+          'price': price,
+          'qty': qty,
+          'amount': amount,
+          'imageUrl': imageUrl,
+        });
+      }
 
       await batch.commit();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('สร้างออเดอร์สำเร็จ (#${orderRef.id})')),
+        SnackBar(content: Text('Order placed successfully (#${orderRef.id})')),
       );
-
       Navigator.of(
         context,
-      ).pop({'orderId': orderRef.id, 'product': _selectedProduct});
+      ).pop({'orderId': orderRef.id}); // Pop back with order ID
     } catch (e, st) {
       debugPrint('Place order failed: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('สร้างออเดอร์ไม่สำเร็จ: $e')));
+      ).showSnackBar(SnackBar(content: Text('Failed to place order: $e')));
     } finally {
       if (mounted) setState(() => _isPlacingOrder = false);
     }
   }
 
-  // -------------------- UI --------------------
+  // --- Map Update Logic ---
+  void _updateMap(Map<String, dynamic> receiverData) {
+    // Extract location data (can be GeoPoint or List [lat, lng])
+    final locationData = receiverData['addresses']?[0]?['location'];
+    latlong.LatLng? targetPosition;
+
+    if (locationData is GeoPoint) {
+      targetPosition = latlong.LatLng(
+        locationData.latitude,
+        locationData.longitude,
+      );
+    } else if (locationData is List &&
+        locationData.length >= 2 &&
+        locationData[0] is num &&
+        locationData[1] is num) {
+      targetPosition = latlong.LatLng(
+        locationData[0].toDouble(),
+        locationData[1].toDouble(),
+      );
+    }
+
+    // Update state and map only if position is valid and changed
+    if (targetPosition != null && targetPosition != _receiverLocation) {
+      // Use addPostFrameCallback to ensure the map controller is ready
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          // Ensure widget is still mounted
+          setState(() {
+            _receiverLocation = targetPosition;
+            _markers = [
+              Marker(
+                width: 80.0,
+                height: 80.0,
+                point: targetPosition!,
+                child: Icon(
+                  // Simple marker icon
+                  Icons.location_pin,
+                  color: Colors.green.shade700,
+                  size: 45.0,
+                ),
+              ),
+            ];
+          });
+          // Move map camera
+          _mapController.move(targetPosition!, 15.0); // Zoom level 15
+        }
+      });
+    } else if (targetPosition == null && _receiverLocation != null) {
+      // If location becomes invalid, clear marker
+      setState(() {
+        _receiverLocation = null;
+        _markers = [];
+      });
+      debugPrint("Receiver location data is missing or invalid.");
+    } else if (targetPosition == null && _markers.isNotEmpty) {
+      // Ensure markers are clear if location was never valid
+      setState(() {
+        _markers = [];
+      });
+      debugPrint("Receiver location data is missing or invalid.");
+    }
+  }
+
+  // -------------------- UI Build Method --------------------
   @override
   Widget build(BuildContext context) {
-    final hasSelected = _selectedProduct != null;
+    final bool hasProducts = _selectedProducts.isNotEmpty;
+    // ⭐️⭐️⭐️ IMPORTANT: Replace with your actual package name ⭐️⭐️⭐️
+    // Find this in android/app/build.gradle (look for applicationId)
+    const String yourAppPackageName =
+        'com.example.move_delivery'; // <-- REPLACE THIS
 
     return Scaffold(
-      appBar: AppBar(title: const Text('รายละเอียดสินค้า'), centerTitle: true),
+      appBar: AppBar(title: const Text('Order Details'), centerTitle: true),
       body: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.store),
-                      label: Text(
-                        hasSelected ? 'เปลี่ยนสินค้า' : 'เลือกจากคลังสินค้า',
-                      ),
-                      onPressed: _isPlacingOrder ? null : _openProductPicker,
-                    ),
-                  ),
-                ],
+              // "Add Product" Button
+              OutlinedButton.icon(
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text('Add Product from Catalog'),
+                onPressed: _isPlacingOrder ? null : _openProductPicker,
               ),
               const SizedBox(height: 12),
-              if (hasSelected) _buildSelectedProductSection(_selectedProduct!),
+
+              // Product List (Cart) or Empty Message
+              if (hasProducts)
+                _buildProductList()
+              else
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'Your order is empty. Add products using the button above.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 24),
 
-              // ผู้ส่ง + ผู้รับ
+              // Sender, Receiver, and Map Section
               StreamBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
                 stream: _senderStream(),
                 builder: (context, senderSnap) {
                   if (senderSnap.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
                   }
-                  if (!senderSnap.hasData || senderSnap.data == null) {
-                    return _errorCard('ยังไม่ได้เข้าสู่ระบบ');
-                  }
-                  if (!senderSnap.data!.exists) {
-                    return _errorCard('ไม่พบข้อมูลผู้ส่ง');
+                  if (!senderSnap.hasData ||
+                      senderSnap.data == null ||
+                      !senderSnap.data!.exists) {
+                    return _errorCard(
+                      'Sender data not found. Please log in again.',
+                    );
                   }
                   final sender = senderSnap.data!.data()!;
 
+                  // Stream for Receiver Data
                   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: _receiverStream(),
                     builder: (context, receiverSnap) {
-                      if (receiverSnap.connectionState ==
-                          ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
+                      Map<String, dynamic>? receiver;
+                      // Only process receiver data if loaded successfully
+                      if (receiverSnap.connectionState !=
+                              ConnectionState.waiting &&
+                          receiverSnap.hasData &&
+                          receiverSnap.data!.exists) {
+                        receiver = receiverSnap.data!.data()!;
+                        // Call _updateMap when receiver data is available
+                        _updateMap(receiver!);
                       }
-                      if (!receiverSnap.hasData || !receiverSnap.data!.exists) {
-                        return _errorCard(
-                          'ไม่พบข้อมูลผู้รับ (uid: ${widget.receiverUid})',
-                        );
-                      }
-                      final receiver = receiverSnap.data!.data()!;
-                      return _buildAddressSection(
-                        sender: sender,
-                        receiver: receiver,
+
+                      // Build UI structure (Address Card + Map Container)
+                      return Column(
+                        children: [
+                          // Address Card (Shows sender always, receiver when loaded)
+                          _buildAddressSection(
+                            sender: sender,
+                            receiver: receiver, // Can be null while loading
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Map Container
+                          SizedBox(
+                            height: 250, // Map height
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: FlutterMap(
+                                mapController: _mapController,
+                                options: MapOptions(
+                                  initialCenter:
+                                      _receiverLocation ??
+                                      const latlong.LatLng(
+                                        16.43,
+                                        102.83,
+                                      ), // Default center (Khon Kaen)
+                                  initialZoom: _receiverLocation == null
+                                      ? 10.0
+                                      : 15.0, // Adjust zoom based on location availability
+                                ),
+                                children: [
+                                  // OpenStreetMap Tile Layer
+                                  TileLayer(
+                                    urlTemplate:
+                                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                    // ⭐️ Use the correct package name here ⭐️
+                                    userAgentPackageName: yourAppPackageName,
+                                  ),
+                                  // Marker Layer
+                                  MarkerLayer(markers: _markers),
+                                ],
+                              ),
+                            ),
+                          ),
+                          // Display error if receiver failed to load
+                          if (receiverSnap.connectionState !=
+                                  ConnectionState.waiting &&
+                              (!receiverSnap.hasData ||
+                                  !receiverSnap.data!.exists))
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: _errorCard(
+                                'Receiver not found (uid: ${widget.receiverUid})',
+                              ),
+                            ),
+                        ],
                       );
                     },
                   );
                 },
               ),
-
               const SizedBox(height: 48),
 
+              // Confirm Order Button
               ElevatedButton.icon(
-                onPressed: _isPlacingOrder ? null : _placeOrder,
+                onPressed: hasProducts && !_isPlacingOrder ? _placeOrder : null,
                 icon: _isPlacingOrder
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : const Icon(Icons.check),
                 label: Text(
-                  _isPlacingOrder ? 'กำลังสร้างคำสั่งซื้อ…' : 'ยืนยัน',
+                  _isPlacingOrder ? 'Placing Order…' : 'Confirm Order',
                 ),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
+                  backgroundColor: hasProducts
+                      ? Theme.of(context).primaryColor
+                      : Colors.grey, // Grey out if no products
+                  foregroundColor: Colors.white,
                 ),
               ),
             ],
@@ -258,6 +415,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       ),
     );
   }
+
+  // --- Helper Widgets ---
 
   Widget _errorCard(String message) {
     return Card(
@@ -269,78 +428,76 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     );
   }
 
-  Widget _buildSelectedProductSection(Map<String, dynamic> p) {
-    final name = (p['name'] ?? '-').toString();
-    // กันกรณี description เป็น null
-    final desc = (p['description'] ?? '').toString();
-    // กันชนราคา -> double แน่นอน
-    final double price = (p['price'] is num)
-        ? (p['price'] as num).toDouble()
-        : double.tryParse('${p['price'] ?? 0}') ?? 0.0;
-    final img = (p['imageUrl'] ?? '').toString();
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: (img.isNotEmpty)
-                  ? Image.network(img, width: 90, height: 90, fit: BoxFit.cover)
-                  : Container(
-                      width: 90,
-                      height: 90,
-                      color: Colors.grey[200],
-                      child: const Icon(Icons.image),
-                    ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    desc,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: Colors.grey[700]),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${price.toStringAsFixed(2)} ฿',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              tooltip: 'ล้างสินค้า',
-              onPressed: _isPlacingOrder
-                  ? null
-                  : () => setState(() => _selectedProduct = null),
-              icon: const Icon(Icons.close),
-            ),
-          ],
+  // Widget to display the list of selected products (Cart)
+  Widget _buildProductList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Selected Products:",
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
-      ),
+        const SizedBox(height: 8),
+        ListView.separated(
+          shrinkWrap: true, // Needed inside SingleChildScrollView
+          physics:
+              const NeverScrollableScrollPhysics(), // Disable internal scrolling
+          itemCount: _selectedProducts.length,
+          separatorBuilder: (context, index) =>
+              const Divider(height: 1, indent: 16, endIndent: 16),
+          itemBuilder: (context, index) {
+            final p = _selectedProducts[index];
+            final name = (p['name'] ?? '-').toString();
+            final double price = (p['price'] as num?)?.toDouble() ?? 0.0;
+            final int qty = (p['qty'] as int?) ?? 1;
+            final img = (p['imageUrl'] ?? '').toString();
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 8.0,
+                vertical: 4.0,
+              ), // Adjust padding
+              leading: ClipRRect(
+                // Add rounded corners to image
+                borderRadius: BorderRadius.circular(4.0),
+                child: (img.isNotEmpty)
+                    ? Image.network(
+                        img,
+                        width: 50,
+                        height: 50,
+                        fit: BoxFit.cover,
+                      )
+                    : Container(
+                        width: 50,
+                        height: 50,
+                        color: Colors.grey[200],
+                        child: const Icon(Icons.image),
+                      ),
+              ),
+              title: Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+              subtitle: Text(
+                '${qty} x ${price.toStringAsFixed(2)} ฿ = ${(qty * price).toStringAsFixed(2)} ฿',
+                style: TextStyle(color: Colors.grey[600]),
+              ),
+              trailing: IconButton(
+                icon: Icon(
+                  Icons.remove_circle_outline,
+                  color: Colors.red.shade400,
+                ),
+                tooltip: 'Remove',
+                onPressed: _isPlacingOrder ? null : () => _removeProduct(index),
+              ),
+            );
+          },
+        ),
+        const Divider(height: 1), // Add final divider
+      ],
     );
   }
 
+  // Extracts address details from user data
   ({String label, String address, String coords}) _extractAddress(
     Map<String, dynamic> user,
   ) {
@@ -349,25 +506,33 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       final a = (addresses.first as Map).cast<String, dynamic>();
       final label = (a['label'] ?? '-') as String;
       final addressText = (a['address'] ?? '-') as String;
-
       String coords = '';
       final loc = a['location'];
-      if (loc is List && loc.length >= 2) {
-        coords = '(${loc[0]}, ${loc[1]})';
-      } else if (loc is GeoPoint) {
-        coords = '(${loc.latitude}, ${loc.longitude})';
+      // Handle both GeoPoint and List [lat, lng]
+      if (loc is GeoPoint) {
+        coords =
+            '(${loc.latitude.toStringAsFixed(6)}, ${loc.longitude.toStringAsFixed(6)})'; // Format coords
+      } else if (loc is List &&
+          loc.length >= 2 &&
+          loc[0] is num &&
+          loc[1] is num) {
+        coords =
+            '(${loc[0].toStringAsFixed(6)}, ${loc[1].toStringAsFixed(6)})'; // Format coords
       }
       return (label: label, address: addressText, coords: coords);
     }
-    return (label: '-', address: '-', coords: '');
+    return (label: '-', address: '-', coords: ''); // Default values
   }
 
+  // Builds the card showing sender and receiver addresses
   Widget _buildAddressSection({
     required Map<String, dynamic> sender,
-    required Map<String, dynamic> receiver,
+    required Map<String, dynamic>?
+    receiver, // Receiver can be null while loading
   }) {
     final s = _extractAddress(sender);
-    final r = _extractAddress(receiver);
+    // Extract receiver address only if receiver data is available
+    final r = receiver != null ? _extractAddress(receiver) : null;
 
     return Card(
       elevation: 2,
@@ -377,32 +542,57 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
         child: Column(
           children: [
             _buildAddressRow(
-              icon: Icons.location_on,
-              label: 'ที่อยู่ผู้ส่ง',
+              icon: Icons.person_pin_circle_outlined, // Sender icon
+              label: 'Sender Address',
               name: sender['name'] ?? '-',
               phone: sender['phone'] ?? '-',
               addressLabel: s.label,
               addressText: s.address,
-              iconColor: Colors.red,
+              iconColor: Colors.blueAccent, // Sender color
               coordsText: s.coords,
             ),
-            const Divider(height: 24),
-            _buildAddressRow(
-              icon: Icons.location_on,
-              label: 'ที่อยู่ผู้รับ',
-              name: receiver['name'] ?? '-',
-              phone: receiver['phone'] ?? '-',
-              addressLabel: r.label,
-              addressText: r.address,
-              iconColor: Colors.green,
-              coordsText: r.coords,
-            ),
+            const Divider(height: 24, thickness: 0.5),
+            // Show receiver details or a loading placeholder
+            if (receiver != null && r != null)
+              _buildAddressRow(
+                icon: Icons.location_on_outlined, // Receiver icon
+                label: 'Receiver Address',
+                name: receiver['name'] ?? '-',
+                phone: receiver['phone'] ?? '-',
+                addressLabel: r.label,
+                addressText: r.address,
+                iconColor: Colors.green.shade600, // Receiver color
+                coordsText: r.coords,
+              )
+            else
+              const Padding(
+                // Loading state placeholder
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      color: Colors.grey,
+                      size: 24,
+                    ),
+                    SizedBox(width: 16),
+                    Text(
+                      "Loading receiver details...",
+                      style: TextStyle(
+                        color: Colors.grey,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
+  // Builds a single row within the address card
   Widget _buildAddressRow({
     required IconData icon,
     required Color iconColor,
@@ -424,21 +614,38 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             children: [
               Text(
                 label,
-                style: const TextStyle(fontSize: 14, color: Colors.grey),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey,
+                ), // Smaller label
               ),
               const SizedBox(height: 4),
               Text(
-                '$name  •  $phone',
+                '$name  •  $phone', // Display name and phone together
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 15, // Slightly smaller main text
                   fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 4),
-              Text('$addressLabel • $addressText'),
+              // Display address label and text, handle cases where one might be missing
+              if (addressLabel != '-' && addressText != '-')
+                Text(
+                  '$addressLabel • $addressText',
+                  style: TextStyle(color: Colors.grey[800]),
+                )
+              else if (addressText != '-')
+                Text(addressText, style: TextStyle(color: Colors.grey[800]))
+              else if (addressLabel != '-')
+                Text(addressLabel, style: TextStyle(color: Colors.grey[800])),
+
+              // Display coordinates if available
               if (coordsText.isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text(coordsText, style: TextStyle(color: Colors.grey[600])),
+                Text(
+                  coordsText,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
               ],
             ],
           ),
@@ -446,17 +653,4 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       ],
     );
   }
-
-  InputDecoration _inputDecoration({required String hintText}) {
-    return InputDecoration(
-      hintText: hintText,
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
-    );
-  }
-}
+} // End of _ProductDetailsScreenState

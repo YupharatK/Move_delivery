@@ -1,5 +1,8 @@
+// productpickerscreen.dart (Final Fix Attempt 2)
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:move_delivery/pages/User/Sender/create_product_screen.dart'; // Ensure this path is correct
 
 class ProductPickerScreen extends StatefulWidget {
   const ProductPickerScreen({super.key});
@@ -9,7 +12,7 @@ class ProductPickerScreen extends StatefulWidget {
 }
 
 class _ProductPickerScreenState extends State<ProductPickerScreen> {
-  final Map<String, int> _qty = {}; // qty ต่อสินค้า
+  final Map<String, int> _qty = {}; // qty per product
   static const _pageSize = 30;
   DocumentSnapshot? _lastDoc;
   bool _hasMore = true;
@@ -74,7 +77,7 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('โหลดเพิ่มไม่สำเร็จ: $e')));
+      ).showSnackBar(SnackBar(content: Text('Failed to load more: $e')));
     } finally {
       if (mounted) setState(() => _isLoadingMore = false);
     }
@@ -95,13 +98,43 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
   void _dec(String id) =>
       setState(() => _qty[id] = ((_qty[id] ?? 1) - 1).clamp(1, 999999));
 
+  Future<void> _openNewProductForm() async {
+    final newProductData = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => const CreateProductScreen()),
+    );
+
+    if (newProductData != null) {
+      final productForOrder = {
+        'productId': newProductData['id'],
+        'name': newProductData['name'],
+        'description': newProductData['description'],
+        'imageUrl': newProductData['imageUrl'],
+        'price': newProductData['price'],
+        'qty': 1,
+      };
+      if (mounted) {
+        Navigator.pop(context, productForOrder);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('เลือกสินค้า (ไม่ auto-reload)'),
+        title: const Text('Select Product'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchFirst),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Add New Product',
+            onPressed: _openNewProductForm,
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: _fetchFirst,
+          ),
         ],
       ),
       body: _buildBody(),
@@ -117,18 +150,20 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('โหลดสินค้าไม่สำเร็จ\n$_error'),
+              Text('Failed to load products\n$_error'),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _fetchFirst,
-                child: const Text('ลองใหม่'),
+                child: const Text('Retry'),
               ),
             ],
           ),
         ),
       );
     }
-    if (_docs.isEmpty) return const Center(child: Text('ยังไม่มีสินค้า'));
+    if (_docs.isEmpty) {
+      return const Center(child: Text('No products yet (Tap + to add)'));
+    }
 
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
@@ -142,7 +177,8 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
         padding: const EdgeInsets.all(12),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
-          childAspectRatio: 0.74,
+          // ✅⭐️ FIX 1: ลดค่า Aspect Ratio ลงอีก ⭐️✅
+          childAspectRatio: 0.45, // (เดิม 0.74 -> 0.55 -> 0.5)
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
         ),
@@ -155,17 +191,13 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
           final doc = _docs[i];
           final data = doc.data();
           final id = doc.id;
-
           final name = (data['name'] ?? '-').toString();
           final desc = (data['description'] ?? '').toString();
           final img = (data['imageUrl'] ?? '').toString();
-
-          // ✨ กันชนราคา -> double แน่นอน
           final raw = data['price'];
           final price = (raw is num)
               ? raw.toDouble()
               : double.tryParse('${raw ?? ''}') ?? 0.0;
-
           final qty = _qty[id] ?? 1;
 
           return Card(
@@ -193,25 +225,37 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
+                        // 1. Content Area (Text) - Flexible
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                desc,
+                                maxLines:
+                                    2, // Allow up to 2 lines for description
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          desc,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.grey[700],
-                            fontSize: 12,
-                          ),
-                        ),
+                        const SizedBox(height: 8),
+
+                        // 2. Footer Area - Fixed at bottom
                         Container(
                           decoration: BoxDecoration(
                             color: Colors.grey[50],
@@ -221,8 +265,11 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
                             horizontal: 10,
                             vertical: 8,
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              // ✅⭐️ FIX 2: จัดเรียง Price และ Stepper ใหม่ ⭐️✅
+                              // Line 1: Price
                               Text(
                                 '${price.toStringAsFixed(2)} ฿',
                                 style: const TextStyle(
@@ -230,13 +277,20 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
                                   fontSize: 14,
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              _QtyStepper(
-                                value: qty,
-                                onAdd: () => _inc(id),
-                                onRemove: qty > 1 ? () => _dec(id) : null,
+                              const SizedBox(height: 4), // Small gap
+                              // Line 2: Stepper (Aligned Right)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: _QtyStepper(
+                                  value: qty,
+                                  onAdd: () => _inc(id),
+                                  onRemove: qty > 1 ? () => _dec(id) : null,
+                                ),
                               ),
-                              const Spacer(),
+                              const SizedBox(
+                                height: 8,
+                              ), // Spacing before button
+                              // Line 3: Select Button
                               SizedBox(
                                 height: 36,
                                 child: ElevatedButton(
@@ -247,19 +301,21 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 16,
                                     ),
+                                    // Optional: Add some color
+                                    // backgroundColor: Theme.of(context).primaryColor,
+                                    // foregroundColor: Colors.white,
                                   ),
                                   onPressed: () {
-                                    // ✨ ส่งค่าที่ฝั่งรายละเอียดต้องใช้ครบเสมอ
                                     Navigator.pop(context, {
                                       'productId': id,
                                       'name': name,
                                       'description': desc,
                                       'imageUrl': img,
-                                      'price': price, // double ชัวร์
-                                      'qty': qty, // int ชัวร์
+                                      'price': price,
+                                      'qty': qty,
                                     });
                                   },
-                                  child: const Text('เลือก'),
+                                  child: const Text('Select'),
                                 ),
                               ),
                             ],
@@ -283,6 +339,8 @@ class _ProductPickerScreenState extends State<ProductPickerScreen> {
   );
 }
 
+// --- Helper Widgets (No changes needed here) ---
+
 class _QtyStepper extends StatelessWidget {
   const _QtyStepper({
     required this.value,
@@ -296,6 +354,7 @@ class _QtyStepper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min, // Make row only as wide as needed
       children: [
         _RoundIconBtn(icon: Icons.remove, onPressed: onRemove),
         Padding(
