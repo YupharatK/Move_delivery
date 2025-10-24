@@ -1,3 +1,5 @@
+// search_receiver_screen.dart (แก้ไข: ค้นหา "Starts With" บน field 'phone')
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -18,13 +20,25 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. (เหมือนเดิม) ทำให้คำค้นหาสะอาด
     final String normalized = _normalizePhone(_searchPhone);
 
-    final Query<Map<String, dynamic>> query = (normalized.isEmpty)
-        ? FirebaseFirestore.instance.collection('users')
-        : FirebaseFirestore.instance
-              .collection('users')
-              .where('phone', isEqualTo: normalized);
+    // ⭐️ 2. (แก้ไข) เปลี่ยน Query ให้เป็นการค้นหาแบบ "Starts With"
+    final Query<Map<String, dynamic>> query;
+    if (normalized.isEmpty) {
+      // ถ้าช่องค้นหาว่าง, แสดงทั้งหมด
+      query = FirebaseFirestore.instance.collection('users');
+    } else {
+      // ถ้ามีการค้นหา, ให้ค้นหาแบบ "ขึ้นต้นด้วย"
+      query = FirebaseFirestore.instance
+          .collection('users')
+          // ⭐️ 2.1 ค้นหาบน field 'phone' (ตามรูปของคุณ)
+          .where('phone', isGreaterThanOrEqualTo: normalized)
+          // ⭐️ 2.2 \uf8ff คือตัวอักษรพิเศษที่ใช้บอกว่า "ไปจนสุดคำนี้"
+          .where('phone', isLessThan: '$normalized\uf8ff')
+          // ⭐️ 2.3 ต้อง orderBy field เดียวกันกับที่
+          .orderBy('phone');
+    }
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -56,14 +70,23 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
 
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              // ⭐️ 3. (แก้ไข) ใช้ query ตัวใหม่
               stream: query.snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
-                  return const Center(
-                    child: Text('เกิดข้อผิดพลาดในการโหลดข้อมูล'),
+                  // ⭐️ 4. (สำคัญ) ถ้าเกิด Error ให้อ่าน Error นี้!
+                  // มันอาจจะขอให้คุณสร้าง Index
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Text(
+                        'เกิดข้อผิดพลาด:\n${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                   );
                 }
                 if (!snapshot.hasData) {
@@ -82,6 +105,7 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
                   return const Center(child: Text('ไม่พบผู้รับที่ค้นหา'));
                 }
 
+                // (ส่วน ListView.builder และ _buildResultTile ไม่ต้องแก้ไข)
                 return ListView.builder(
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
@@ -90,11 +114,9 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
                     final data = doc.data();
 
                     final name = (data['name'] ?? '-') as String;
-                    // แนะนำให้เก็บ phone ในฐานข้อมูลแบบ normalized (ตัวเลขล้วน)
                     final phone = (data['phone'] ?? '-') as String;
                     final photo = (data['userPhotoUrl'] ?? '') as String;
 
-                    // addresses: [{label, address, location:[lat,lng] หรือ GeoPoint}]
                     final List<dynamic> addresses =
                         (data['addresses'] as List<dynamic>? ?? []);
 
@@ -113,6 +135,13 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
                         coordsText = '(${loc[0]}, ${loc[1]})';
                       } else if (loc is GeoPoint) {
                         coordsText = '(${loc.latitude}, ${loc.longitude})';
+                      }
+                      // ⭐️ (หมายเหตุ) location ในรูปของคุณ เป็น String
+                      // ไม่ใช่ GeoPoint หรือ List
+                      // โค้ดส่วนนี้อาจจะไม่ทำงาน ถ้าข้อมูล location ของคุณ
+                      // ไม่ใช่แบบที่โค้ดคาดหวัง (GeoPoint หรือ List)
+                      else if (loc is String) {
+                        coordsText = loc; // ⭐️ แสดง String ที่อ่านได้
                       }
                     }
 
@@ -136,6 +165,7 @@ class _SearchReceiverScreenState extends State<SearchReceiverScreen> {
     );
   }
 
+  // (Widget _buildResultTile ไม่ต้องแก้ไข)
   Widget _buildResultTile({
     required BuildContext context,
     required String receiverUid,
